@@ -6,7 +6,7 @@ Phases are ordered to validate the riskiest assumptions earliest. Each phase's c
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1 | Scaffolding | not started |
+| 1 | Scaffolding | complete |
 | 2 | Storage Engine | not started |
 | 3 | Wire Protocol | not started |
 | 4 | Single-Node End-to-End | not started |
@@ -24,9 +24,9 @@ Phases are ordered to validate the riskiest assumptions earliest. Each phase's c
 `build.zig` defines two targets from day one: `typha` (the server) and `typha_sim` (simulation harness). All shared types (`Event`, `Filter`, `Cursor`, `MessageType`) and constants (`SEGMENT_FILE_BYTES`, `MAX_PAYLOAD_BYTES`, `QUORUM`) live here before anything else references them.
 
 **Checkpoint:**
-- [ ] `zig build` is clean with no warnings
-- [ ] Every constant from the spec is defined and matches exactly: `SEGMENT_FILE_BYTES = 134217728`, `MAX_PAYLOAD_BYTES = 65536`, `QUORUM = floor(R/2) + 1`
-- [ ] Both build targets (`typha`, `typha_sim`) exist and link
+- [x] `zig build` is clean with no warnings
+- [x] Every constant from the spec is defined and matches exactly: `SEGMENT_FILE_BYTES = 134217728`, `MAX_PAYLOAD_BYTES = 65536`, `QUORUM = floor(R/2) + 1`
+- [x] Both build targets (`typha`, `typha_sim`) exist and link
 
 ---
 
