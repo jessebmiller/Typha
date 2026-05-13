@@ -1,0 +1,6 @@
+.{
+    .name = .typha,
+    .version = "0.0.0",
+    .fingerprint = 0x1f27863544f43017,
+    .paths = .{""},
+}
