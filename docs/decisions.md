@@ -29,8 +29,10 @@
 **Decision:** Entity IDs are provided by the client. The store assigns only sequence numbers (per-entity) and timestamps (per-event).
 
 **Rationale:**
+// NOTE I'd like to think through this assumption. There are definitnely circumstances where the client wants control of the ids but many clients will want their database to handle it, and many will use this as their database. Potentially client libraries though could handle id generation
 - Domain services typically already have a canonical ID for their entities (order ID, customer ID, etc.) established before the first event is written
 - Client-managed IDs allow embedding the same ID in related systems and event payloads without a round-trip to the store
+// NOTE I don't think this is really true, often a client can wait for the write response to find out about the ID. The following is only true if they want to put the ID in the "create entity", the first, payload for a given entity
 - Store-generated IDs would require a client to call the store before it has anything to write, just to obtain an ID
 - Sequence numbers (store-assigned, monotonically increasing, gapless per entity) provide all the ordering guarantees the store needs to enforce
 
