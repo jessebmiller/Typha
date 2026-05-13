@@ -24,7 +24,7 @@
 
 **Status:** Accepted
 
-**Context:** Every write and read requires identifying the target entity by (entity_type, entity_id). The question is whether the store generates entity IDs or clients provide them.
+**Context:** Every write and most reads require identifying the target entity by (entity_type, entity_id). The question is whether the store generates entity IDs or clients provide them.
 
 **Decision:** Entity IDs are provided by the client. The store assigns only sequence numbers (per-entity) and timestamps (per-event).
 
