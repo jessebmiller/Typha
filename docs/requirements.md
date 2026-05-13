@@ -47,6 +47,7 @@ Two operator-only admin operations exist outside the client API:
 
 **Durability:** An acknowledged write (one that returned a sequence number) MUST survive the failure of any minority of nodes.
 
+// NOTE does the system require sequence numbers to be gapless or start at 1? Let's not constrain our implementation unless we gain something from it
 **Ordering:** Within an entity, sequence numbers are monotonically increasing, gapless, starting at 1, and assigned in write-acceptance order.
 
 **Immutability:** Once acknowledged, an event's sequence number, timestamp, and payload are permanent and unchangeable.
