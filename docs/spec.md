@@ -69,31 +69,52 @@ Postconditions:
 ### Read
 
 ```
-Read(T: EntityType, ID: EntityID, since: SequenceNo | null)
+Read(f: Filter, since: SequenceNo | null)
   -> ordered Stream<Event>
 
 Preconditions:
-  T is non-empty
-  ID is non-empty
+  f is a valid Filter
+  If f = ByEntity(T, ID): T and ID are non-empty
+  If f = ByType(T): T is non-empty
 
-Let N = |Log(T, ID)| at time read begins
+Let S = the set of matching events at time read begins:
+  matches(ALL,            e) = true
+  matches(ByType(T),      e) = (e.entity_type = T)
+  matches(ByEntity(T,ID), e) = (e.entity_type = T AND e.entity_id = ID)
 
 Postconditions:
-  Returns exactly { e in Log(T, ID) | e.seq > since }
-    (or all events if since = null)
-  Events are returned in ascending seq order
-  Stream is finite: contains exactly N - since events
-  No event with seq <= N is omitted
+  If f = ByEntity(T, ID):
+    Returns exactly { e in Log(T, ID) | e.seq > since }
+      (or all events if since = null)
+    Events returned in ascending seq order
+    Stream is finite: no event with seq <= |Log(T,ID)| at read-start is omitted
+
+  If f = ByType(T) or f = ALL:
+    Returns exactly the events in S with timestamp > since - SKEW_WINDOW
+      (or all matching events if since = null)
+    Within each entity, events are returned in ascending seq order
+    Cross-entity ordering: by timestamp, not guaranteed strict
+    Stream is finite and complete as of read-start
+    Clients must tolerate duplicate delivery when resuming from a cursor
 ```
 
 ### Subscribe
 
 ```
-Subscribe(f: Filter) -> infinite Stream<Event>
+Subscribe(f: Filter, since: Cursor | null) -> infinite Stream<Event>
 
 Postconditions:
-  For every Event e written and acknowledged after subscription opens:
-    matches(f, e) => e is delivered at least once
+  If since = null:
+    For every Event e written and acknowledged after subscription opens:
+      matches(f, e) => e is delivered at least once
+
+  If since is a Cursor:
+    For ByEntity: since is a SequenceNo; delivers events with seq > since,
+      then transitions to live delivery with no gap.
+    For ByType or ALL: since is a TimestampNs; delivers events with
+      timestamp > since - SKEW_WINDOW, then transitions to live delivery.
+    No event is omitted at the seam between historical and live delivery.
+    Clients must tolerate duplicate delivery when resuming from a cursor.
 
   matches(ALL,            e) = true
   matches(ByType(T),      e) = (e.entity_type = T)
@@ -154,15 +175,21 @@ Shard    = a contiguous range of (EntityType, EntityID) key space
 Replica  = one node holding a full copy of one shard's data
 Cluster  = set of shards covering the full key space, each with R replicas
 
+SKEW_WINDOW = operator-configured TimestampNs duration; bounds clock skew
+              across shard leaders; used as rewind margin for cross-entity
+              cursor resumption (expected value: low single-digit seconds)
+
 Per shard:
   - One Raft group of R nodes
   - One leader; leader handles all writes and (by default) reads
   - Writes committed when floor(R/2) + 1 nodes confirm
 
 Per node:
-  - Segment log: fixed-size append-only files
-  - Index: EntityType x EntityID -> [(seq, file_offset)]
-  - Index is memory-resident; recoverable by replaying segment log
+  - Segment log: fixed-size append-only files, written in commit order
+  - Segment metadata: per-segment (min_timestamp, max_timestamp) recorded
+    at segment seal time; used to skip segments in timestamp-range scans
+  - Entity index: EntityType x EntityID -> [(seq, file_offset)]
+    Memory-resident; recoverable by replaying segment log
 ```
 
 ## Failure Model

@@ -2,11 +2,11 @@
 
 ## Purpose
 
-A purpose-built, distributed, append-only event store for event-sourced systems. Does exactly three things: append, read, subscribe. Everything else is out of scope.
+An append-only event store for event-sourced systems. Clients append events, read event history, and subscribe to ongoing event streams. The store does not interpret payloads.
 
 ## Clients
 
-Domain services are the clients. They coordinate among themselves on event payload shape. The store does not interpret payloads.
+Domain services are the clients. They coordinate among themselves on event payload shape.
 
 ## Functional Requirements
 
@@ -20,23 +20,28 @@ Write an event to an entity's log.
 
 ### FR-2: Read
 
-Read events from an entity's log.
+Read events matching a filter.
 
-- **Inputs:** `entity_type`, `entity_id`, `since` (sequence_number, optional)
-- **Outputs:** ordered stream of `(sequence_number, timestamp_ns, payload)`
-- **Semantics:** Returns all events with `sequence_number > since`, in ascending order. If `since` is omitted, returns all events. The stream is finite and complete as of the moment the read begins.
+- **Inputs:** `filter` (ALL | ByType(entity_type) | ByEntity(entity_type, entity_id)), `since` (cursor, optional)
+- **Outputs:** ordered stream of `(entity_type, entity_id, sequence_number, timestamp_ns, payload)`
+- **Semantics:** Returns all matching events, in ascending order within each entity. The stream is finite and complete as of the moment the read begins. For `ByEntity`, `since` is a sequence number. For broader filters, cursor semantics are TBD (see OD-7).
 
 ### FR-3: Subscribe
 
-Receive new events as they are written.
+Receive events as they are written, with optional catch-up from history.
 
-- **Inputs:** filter — one of `ALL`, `ByType(entity_type)`, or `ByEntity(entity_type, entity_id)`
+- **Inputs:** `filter` (ALL | ByType(entity_type) | ByEntity(entity_type, entity_id)), `since` (cursor, optional)
 - **Outputs:** ongoing stream of `(entity_type, entity_id, sequence_number, timestamp_ns, payload)`
-- **Semantics:** Delivers every matching event written after the subscription opens. Delivery is at-least-once. Within a single entity, events are delivered in sequence number order. Cross-entity ordering is approximate (by leader-assigned timestamp, not guaranteed strict).
+- **Semantics:** If `since` is provided, first delivers all matching historical events after the cursor, then transitions seamlessly to live delivery with no gap. If `since` is omitted, delivers only events written after the subscription opens. Delivery is at-least-once. Within a single entity, events are delivered in sequence number order. Cross-entity ordering is approximate (by leader-assigned timestamp, not guaranteed strict).
 
-### FR-4: Nothing Else
+### FR-4: Boundaries
 
-No delete. No update. No transactions across entities. No payload inspection. No built-in projections. No schema management.
+No delete. No update. No cross-entity transactions. No payload inspection. No built-in projections. No schema management.
+
+Two operator-only admin operations exist outside the client API:
+
+- **PayloadRedact:** overwrites the payload of a single event with a tombstone marker. Sequence number, timestamp, and event count are preserved. Requires operator credentials; fully audited.
+- **EntityLogDelete:** destroys all events for an entity and reclaims storage. Active readers and subscribers for that entity receive an explicit error or end-of-stream. Highest authorization bar; fully audited.
 
 ## Non-Functional Requirements
 
@@ -50,6 +55,8 @@ No delete. No update. No transactions across entities. No payload inspection. No
 
 **Availability:** The cluster continues serving reads and writes as long as a quorum of replicas per shard is reachable.
 
+**Transport:** Streaming-only. The transport must support long-lived streams with client-controlled flow (backpressure). Request/response transports (HTTP/1.1) are excluded. This makes pagination via a `limit` parameter unnecessary — clients read at their own pace.
+
 **Latency (aspirational v1):** Append p99 < 10ms. Read first-byte p99 < 5ms.
 
 ## Open Decisions
@@ -60,5 +67,5 @@ No delete. No update. No transactions across entities. No payload inspection. No
 | OD-2 | Max payload size | Needs an upper bound to prevent unbounded memory allocation. |
 | OD-3 | Replication factor | Hardcoded 3, or operator-configurable? |
 | OD-4 | Follower reads | Read from leader only (strong consistency) or allow stale follower reads (lower latency option)? |
-| OD-5 | Subscription resumption | Can a subscriber reconnect and resume from a sequence number, or does a new subscription only receive future events? |
-| OD-6 | Wire protocol | gRPC, custom TCP framing, or HTTP/2? |
+| OD-6 | Wire protocol | Must support streaming (HTTP/1.1 excluded). Options: gRPC, custom TCP framing, HTTP/2 bare. |
+| OD-7 (resolved) | Cross-entity cursor type | `TimestampNs`. Resuming from cursor T re-delivers events from `T - SKEW_WINDOW` to cover clock skew across shard leaders. Duplicate delivery is acceptable under the existing at-least-once guarantee. `SKEW_WINDOW` is an operator-configured parameter (expected: low single-digit seconds). |
