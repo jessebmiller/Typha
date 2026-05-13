@@ -181,6 +181,11 @@ Use for: DDOS mitigation, catastrophic client misbehavior, bulk junk removal.
 ## Storage Model
 
 ```
+R                  = replication factor; operator-configured at cluster initialization
+                     R in {1, 3, 4, 5, 6, 7, 8, 9}  -- 2 excluded (zero fault tolerance);
+                                                      -- >9 excluded (simulation bound)
+QUORUM             = floor(R/2) + 1                  -- nodes required to commit a write
+
 Shard    = a contiguous range of (EntityType, EntityID) key space
 Replica  = one node holding a full copy of one shard's data
 Cluster  = set of shards covering the full key space, each with R replicas
@@ -194,7 +199,7 @@ SKEW_WINDOW        = operator-configured u64 nanosecond duration; bounds clock
 Per shard:
   - One VSR group of R nodes
   - One primary; primary handles all writes and all reads
-  - Writes committed when floor(R/2) + 1 nodes confirm
+  - Writes committed when QUORUM nodes confirm
 
 Per node:
   - Segment log: fixed-size append-only files of SEGMENT_FILE_BYTES, written in commit order
@@ -203,6 +208,58 @@ Per node:
   - Entity index: EntityType x EntityID -> [(seq, file_offset)]
     Memory-resident; recoverable by replaying segment log
 ```
+
+## Wire Protocol
+
+The client API is carried over a custom binary protocol on TCP. Each connection multiplexes logical streams via a stream ID field in the frame header.
+
+```
+Frame = {
+    stream_id : u32    -- logical stream; 0 reserved for connection-level messages
+    msg_type  : u8     -- see MessageType below
+    length    : u32    -- payload byte count
+    payload   : bytes  -- [length] bytes; structure determined by msg_type
+}
+
+MessageType =
+    APPEND_REQ       -- client → server: Append(entity_type, entity_id, payload)
+  | APPEND_RESP      -- server → client: (seq, timestamp) or error
+  | READ_REQ         -- client → server: Read(filter, cursor)
+  | READ_EVENT       -- server → client: one Event in a Read stream
+  | READ_END         -- server → client: Read stream complete
+  | SUBSCRIBE_REQ    -- client → server: Subscribe(filter, cursor)
+  | SUB_EVENT        -- server → client: one Event in a Subscribe stream
+  | CREDITS          -- client → server: grant n more events on stream_id
+  | CANCEL           -- client → server: cancel stream_id
+  | PING             -- either direction: keepalive probe
+  | PONG             -- either direction: keepalive response
+  | ERROR            -- server → client: stream or connection error
+```
+
+Flow control precondition for streaming operations (Read, Subscribe):
+
+```
+FlowControl(stream_id):
+  Server delivers at most C events on stream_id before pausing,
+  where C = cumulative credits granted by client via CREDITS frames.
+  Initial credit is 0; client sends CREDITS before or after READ_REQ / SUBSCRIBE_REQ.
+  Server MUST NOT send READ_EVENT or SUB_EVENT when credits = 0.
+```
+
+Connection lifecycle:
+
+```
+On connect:    Client sends a HANDSHAKE frame (not listed above; carries protocol version).
+               Server responds with HANDSHAKE_OK or ERROR.
+On keepalive:  Either party may send PING; the other MUST respond with PONG.
+               A connection with no PONG within KEEPALIVE_TIMEOUT_NS is considered dead.
+On cancel:     Client sends CANCEL(stream_id); server stops delivery on that stream.
+On error:      Server sends ERROR(stream_id, code); stream_id=0 means connection-level error.
+```
+
+Note: VSR consensus messages (PrepareRequest, PrepareOk, etc.) are internal node-to-node
+traffic carried on a separate connection with their own framing. This section covers only
+the public client API.
 
 ## Failure Model
 

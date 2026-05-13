@@ -51,6 +51,12 @@ The deciding factor: simulation testing validates the implementation, not the pr
 
 Scoped message types for Typha: PrepareRequest, PrepareOk, CommitRequest, StartViewChange, DoViewChange, StartView, RecoveryRequest, RecoveryResponse, AppendRequest (client), AppendResponse (client), ReadRequest (client), ReadResponse (client). Approximately 12 message types — a tractable, bounded surface area for a bespoke implementation.
 
+**Replication factor:** R is operator-configurable, set at cluster initialization and fixed for the lifetime of the cluster. VSR defines a reconfiguration protocol (Liskov & Cowling 2012) for changing group membership at runtime; that is out of scope for v1.
+
+Valid values: R ∈ {1, 3, 4, 5, 6, 7, 8, 9}. R=2 is excluded — it requires both nodes for quorum (`floor(2/2)+1 = 2`), giving zero fault tolerance at double the cost of R=1; it is a footgun with no legitimate production use. R > 9 is excluded to keep the simulation testing surface bounded. Quorum is always `floor(R/2) + 1`; this formula is used as a computed constant throughout the codebase, never hardcoded.
+
+R=1 is a valid single-node configuration (development and low-criticality deployments). R=6 is a natural fit for 3-AZ deployments (2 nodes per AZ): losing any AZ leaves 4 of 6 nodes, exactly meeting quorum. TigerBeetle uses this topology as its standard configuration.
+
 ## Entity ID Ownership — Client-Managed
 
 The store's job is to append and retrieve events, not to generate identifiers — that is a client-layer concern. Clients with an existing canonical domain ID (order ID, account ID, etc.) use it directly; clients that need ID generation can handle it in a client library. The core system stays simple either way.
@@ -79,6 +85,48 @@ Conflating them into a single "admin delete" operation would obscure these diffe
 Both operations must be: inaccessible via the normal client protocol, gated on operator credentials, and fully audited (who, what, when, why).
 
 Proactive alternative for PII: clients should encrypt sensitive fields before appending and store the encryption key separately (crypto-shredding). To erase the data, destroy the key. The payload in the store becomes permanently unreadable without any store operation. PayloadRedact is the escape hatch for when this was not done.
+
+## Wire Protocol — Custom TCP Framing
+
+The public client API (Append, Read, Subscribe) uses a bespoke binary protocol over TCP. gRPC, HTTP/2 bare, and Cap'n Proto RPC were all evaluated and rejected; no production-ready Zig library exists for any of them. The realistic alternative was a C FFI dependency on grpc-c, which was rejected on two grounds: its completion-queue API model is architecturally mismatched with Tiger Style's "run at your own pace, batch" principle, and the FFI boundary eliminates most of the correctness transfer benefit since Zig's safety guarantees stop at the C boundary.
+
+Custom TCP framing is not a simplification by comparison to gRPC's total complexity — it is a simplification by comparison to the actual alternative, which is grpc-c via FFI. The protocol surface is small and fully owned: every message type is known at design time, the full spec fits on two pages, and the entire implementation is simulation-testable under the same VOPR harness as the VSR layer.
+
+**Frame format:**
+
+```
+stream_id : u32   -- multiplexes logical streams over one TCP connection
+msg_type  : u8    -- see message type table below
+length    : u32   -- payload byte count
+payload   : bytes -- [length] bytes
+```
+
+Stream multiplexing is required: production event sourcing systems routinely open tens to hundreds of concurrent subscriptions from a single service (e.g. projection services aggregating across many entity types). One TCP connection per stream would cause reconnection storms on server restart and waste file descriptors.
+
+**Flow control:** credit-based per stream. Client sends `CREDITS(stream_id, n)`; server delivers at most `n` events on that stream before waiting for more credits. Simpler than HTTP/2's byte-window WINDOW_UPDATE mechanism and sufficient for this protocol.
+
+**Message types (planned):**
+
+| Type | Direction | Description |
+|------|-----------|-------------|
+| `APPEND_REQ` | client → server | Append request |
+| `APPEND_RESP` | server → client | Append response (seq, timestamp, or error) |
+| `READ_REQ` | client → server | Read request (filter, cursor) |
+| `READ_EVENT` | server → client | One event in a Read stream |
+| `READ_END` | server → client | Read stream complete |
+| `SUBSCRIBE_REQ` | client → server | Subscribe request (filter, cursor) |
+| `SUB_EVENT` | server → client | One event in a Subscribe stream |
+| `CREDITS` | client → server | Flow control: grant n more events on stream |
+| `CANCEL` | client → server | Cancel a stream |
+| `PING` | either | Keepalive probe |
+| `PONG` | either | Keepalive response |
+| `ERROR` | server → client | Stream or connection error |
+
+**TLS:** deferred to the operator layer (service mesh mTLS, WireGuard, etc.). TigerBeetle makes the same choice under identical design constraints. If in-protocol TLS becomes a requirement it can be added without changing the frame format.
+
+**VSR consensus messages** (PrepareRequest, PrepareOk, CommitRequest, etc.) are internal node-to-node traffic and use their own separate binary framing. OD-6 applies only to the public client API.
+
+Webhooks (store-initiated push to client HTTP endpoints) were considered and rejected: they invert the connection direction, require clients to run addressable HTTP servers, move per-subscription cursor tracking into the store, and have poor backpressure characteristics at high event frequencies.
 
 ## Constant and Type Rationale
 

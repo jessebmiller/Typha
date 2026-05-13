@@ -50,10 +50,39 @@ Both require operator credentials, full audit trail, and must be inaccessible vi
 
 ## Open Decisions
 
-| # | Question |
-|---|---|
-| OD-3 | Replication factor — hardcoded 3 or operator-configurable? |
-| OD-6 | Wire protocol — gRPC, custom TCP framing, or HTTP/2 bare? (HTTP/1.1 excluded; streaming required) |
+None.
+
+## Traceability
+
+Every requirement has a row in `docs/traceability.md`. The matrix maps requirements → spec invariants → architecture → planned modules → planned tests. It is the single source of truth for requirement coverage.
+
+**Maintaining the matrix — update it whenever you change any of these:**
+
+| Change | Action |
+|--------|--------|
+| Add/modify a requirement in `requirements.md` | Add or update the corresponding row in the matrix |
+| Add/modify an invariant in `spec.md` | Update the Invariants column for affected rows; add a row if nothing covers the new invariant; update the Invariant Coverage Summary table |
+| Add/modify an architecture decision in `architecture.md` | Update the Architecture column for affected rows |
+| Create a new source module | Fill in the Module column for the row(s) it implements |
+| Write a test | Fill in the Tests column for the row(s) it covers |
+| Resolve an open decision | Remove the blocker from the Blocked-by column and update Architecture/Module columns as needed |
+
+**Tagging assertions in code:**
+
+Every assertion that enforces a spec invariant must carry a tag comment: `// I-N: reason`. This makes coverage greppable.
+
+```zig
+assert(event.seq == log.len + 1); // I-1: seq must be exactly the next position, no gaps.
+assert(event.seq != 0);           // I-1: seq starts at 1; zero is the sentinel for no events.
+```
+
+The Assertion Tags column in the matrix records which tags are expected in each module. Run `grep -r '// I-' src/` to audit coverage.
+
+**Verification script (to be written at implementation start):** `scripts/check_traceability.zig` will:
+1. Grep `src/` for all `// I-N:` tags and confirm each has a matrix row.
+2. Confirm every row's Assertion Tags appear in at least one source file.
+3. Confirm every test name in the Tests column exists as a `test "..."` or `fn test_...` declaration in `src/`.
+4. Exit non-zero on any mismatch (run in CI).
 
 ## Tiger Style (the coding style for this project)
 

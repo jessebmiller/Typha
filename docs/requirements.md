@@ -61,7 +61,4 @@ Two operator-only admin operations exist outside the client API:
 
 ## Open Decisions
 
-| # | Decision | Notes |
-|---|---|---|
-| OD-3 | Replication factor | Hardcoded 3, or operator-configurable? |
-| OD-6 | Wire protocol | Must support streaming (HTTP/1.1 excluded). Options: gRPC, custom TCP framing, HTTP/2 bare. |
+None.
