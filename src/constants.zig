@@ -1,3 +1,4 @@
+// NOTE let's not duplicate justifications in these comments
 // Segment files are fixed at 128 MB. At ~1 GB/s NVMe sequential read speed, replaying
 // one segment on crash recovery takes ~130ms. Smaller than Kafka (1 GB) or Bitcask
 // (2 GB) because Typha never compacts — no benefit to amortizing over larger files.
@@ -18,6 +19,7 @@ pub const entity_id_size_max: u32 = 64;
 
 // R=2 is excluded (floor(2/2)+1 = 2 requires both nodes, giving zero fault tolerance
 // at double the cost of R=1). R>9 is excluded to keep simulation surface bounded.
+// NOTE is min used anywhere?
 pub const replication_factor_min: u32 = 1;
 pub const replication_factor_max: u32 = 9;
 
@@ -25,6 +27,7 @@ pub const replication_factor_max: u32 = 9;
 // without a nullable type at call sites.
 pub const sequence_no_min: u64 = 1;
 
+// NOTE these functions aren't really constants. maybe they go somewhere else?
 pub fn quorum(replication_factor: u32) u32 {
     return replication_factor / 2 + 1;
 }
