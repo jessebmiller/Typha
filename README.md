@@ -15,7 +15,7 @@ Every event belongs to an **entity**, identified by a `(entity_type, entity_id)`
 ```
 Event = {
     entity_type : string       -- e.g. "Order", "Account"
-    entity_id   : bytes        -- client-assigned; any opaque bytes
+    entity_id   : string       -- client-assigned; UTF-8, max 64 bytes
     seq         : u64          -- 1, 2, 3, ... per entity; never reused
     timestamp   : i64          -- nanoseconds since Unix epoch (leader clock)
     payload     : bytes        -- opaque; the store does not interpret it
@@ -45,7 +45,7 @@ Read(filter: ALL | ByType(entity_type) | ByEntity(entity_type, entity_id),
     -> ordered Stream<Event>
 ```
 
-Returns all matching events in ascending order within each entity. The stream is finite and complete as of the moment the read begins. For `ByEntity`, `since` is a sequence number. Cursor type for broader filters is an open decision.
+Returns all matching events in ascending order within each entity. The stream is finite and complete as of the moment the read begins. For `ByEntity`, `since` is a sequence number. For `ByType` and `ALL`, `since` is a `TimestampNs`; resuming re-delivers from `T - SKEW_WINDOW` to cover clock skew across shard leaders.
 
 ### Subscribe
 
@@ -86,9 +86,9 @@ Each node stores its shard data as fixed-size, append-only segment files. An in-
 - Reads are an index lookup followed by a sequential scan from the located offset.
 - The index is fully recoverable by replaying segment files.
 
-### Replication — Raft
+### Replication — VSR
 
-The keyspace is divided into shards. Each shard is a Raft group of R replicas (default R = 3). A write is acknowledged only after `floor(R/2) + 1` nodes confirm it. The cluster tolerates `floor((R-1)/2)` failed nodes per shard while preserving availability.
+The keyspace is divided into shards. Each shard is a VSR group of R replicas. A write is acknowledged only after `floor(R/2) + 1` nodes confirm it. The cluster tolerates `floor((R-1)/2)` failed nodes per shard while preserving availability. VSR uses deterministic round-robin leader election, which makes simulation testing tractable — the deciding factor over Raft.
 
 ---
 
@@ -109,12 +109,8 @@ Aspirational v1 latency targets: Append p99 < 10ms. Read first-byte p99 < 5ms.
 
 | # | Question |
 |---|---|
-| OD-1 | Entity ID format — any bytes, UTF-8 only, or UUID-structured? |
-| OD-2 | Max payload size |
 | OD-3 | Replication factor — hardcoded 3 or operator-configurable? |
-| OD-4 | Follower reads — strong consistency vs. stale follower reads? |
 | OD-6 | Wire protocol — gRPC, custom TCP framing, or HTTP/2 bare? (HTTP/1.1 excluded; streaming required) |
-| OD-7 (resolved) | Cross-entity cursor is `TimestampNs`; resume re-delivers from `T - SKEW_WINDOW` to handle clock skew |
 
 ---
 
@@ -122,4 +118,4 @@ Aspirational v1 latency targets: Append p99 < 10ms. Read first-byte p99 < 5ms.
 
 - [`docs/requirements.md`](docs/requirements.md) — functional and non-functional requirements
 - [`docs/spec.md`](docs/spec.md) — formal specification: definitions, invariants, operations, storage and failure models
-- [`docs/decisions.md`](docs/decisions.md) — architecture decision records (ADRs)
+- [`docs/architecture.md`](docs/architecture.md) — design rationale: language choice, storage engine, entity ID ownership, admin operations

@@ -3,11 +3,14 @@
 ## Definitions
 
 ```
-EntityType   = non-empty UTF-8 string
-EntityID     = non-empty byte sequence
-SequenceNo   = u64, >= 1
-TimestampNs  = i64 (nanoseconds since Unix epoch, leader wall clock)
-Payload      = byte sequence, 0 < len <= MAX_PAYLOAD_BYTES
+EntityType        = non-empty UTF-8 string, 1 <= len <= 128 bytes
+EntityID          = non-empty UTF-8 string, 1 <= len <= 64 bytes
+SequenceNo        = u64, >= 1
+TimestampNs       = i64    -- nanoseconds since Unix epoch, leader wall clock
+SKEW_WINDOW       = u64    -- nanoseconds; operator-configured
+MAX_PAYLOAD_BYTES = 65536
+SEGMENT_FILE_BYTES = 134217728
+Payload           = byte sequence, 0 < len <= MAX_PAYLOAD_BYTES
 
 Event        = { entity_type: EntityType,
                  entity_id:   EntityID,
@@ -22,6 +25,9 @@ Log(T, ID)   = the totally ordered sequence of Events where
 Filter       = ALL
              | ByType(T: EntityType)
              | ByEntity(T: EntityType, ID: EntityID)
+
+Cursor       = SequenceCursor(seq: SequenceNo)    -- valid only with ByEntity filter
+             | TimestampCursor(ts: TimestampNs)   -- valid only with ByType or ALL filter
 ```
 
 ## Invariants
@@ -63,19 +69,21 @@ Postconditions:
   ts = leader wall clock at time of quorum commit
   Log(T, ID)' = Log(T, ID) ++ [Event{T, ID, S, ts, p}]
   Event is committed to floor(R/2) + 1 replicas before return
-  (where R = replication factor, typically 3)
+  (where R = replication factor, typically 3; for odd R this equals ceil(R/2),
+   i.e. a strict majority)
 ```
 
 ### Read
 
 ```
-Read(f: Filter, since: SequenceNo | null)
+Read(f: Filter, since: Cursor | null)
   -> ordered Stream<Event>
 
 Preconditions:
   f is a valid Filter
-  If f = ByEntity(T, ID): T and ID are non-empty
-  If f = ByType(T): T is non-empty
+  If f = ByEntity(T, ID): T and ID are non-empty; since is SequenceCursor or null
+  If f = ByType(T):        T is non-empty;          since is TimestampCursor or null
+  If f = ALL:                                        since is TimestampCursor or null
 
 Let S = the set of matching events at time read begins:
   matches(ALL,            e) = true
@@ -160,7 +168,9 @@ Postconditions:
   Log(T, ID)' = []                    -- entity log is gone
   All storage for (T, ID) is reclaimed
   Active Read or Subscribe calls for (T, ID) receive an explicit error or end-of-stream
-  Violation: fully violates I-1, I-2, I-3, I-4 for this entity
+  Violation: violates I-3 for all events that existed in Log(T, ID) — previously
+             acknowledged writes are no longer retrievable. I-1, I-2, and I-4
+             hold vacuously for an empty log.
 
 WARNING: Largest blast radius of any operation. Any client caching state
 derived from Log(T, ID) must be explicitly invalidated.
@@ -175,17 +185,19 @@ Shard    = a contiguous range of (EntityType, EntityID) key space
 Replica  = one node holding a full copy of one shard's data
 Cluster  = set of shards covering the full key space, each with R replicas
 
-SKEW_WINDOW = operator-configured TimestampNs duration; bounds clock skew
-              across shard leaders; used as rewind margin for cross-entity
-              cursor resumption (expected value: low single-digit seconds)
+SEGMENT_FILE_BYTES = 134217728   -- 128 MB per segment file
+SKEW_WINDOW        = operator-configured u64 nanosecond duration; bounds clock
+                     skew across shard leaders; used as rewind margin for
+                     cross-entity cursor resumption (expected: low single-digit
+                     seconds, i.e. ~1–5 × 10^9 ns)
 
 Per shard:
-  - One Raft group of R nodes
-  - One leader; leader handles all writes and (by default) reads
+  - One VSR group of R nodes
+  - One primary; primary handles all writes and all reads
   - Writes committed when floor(R/2) + 1 nodes confirm
 
 Per node:
-  - Segment log: fixed-size append-only files, written in commit order
+  - Segment log: fixed-size append-only files of SEGMENT_FILE_BYTES, written in commit order
   - Segment metadata: per-segment (min_timestamp, max_timestamp) recorded
     at segment seal time; used to skip segments in timestamp-range scans
   - Entity index: EntityType x EntityID -> [(seq, file_offset)]
@@ -201,9 +213,9 @@ Node failure:    Cluster tolerates floor((R-1)/2) failed nodes per shard
 Durability:      Any acknowledged write survives floor((R-1)/2) simultaneous failures
 
 Network partition:
-                 Minority partition: stops accepting writes (Raft safety)
+                 Minority partition: stops accepting writes (VSR safety)
                  Majority partition: continues normally
-                 Split-brain:        prevented by Raft leader election
+                 Split-brain:        prevented by VSR view change protocol
 
 Data loss:       Only possible if > floor((R-1)/2) replicas fail simultaneously
                  before a write is replicated to quorum (i.e., before Append returns)

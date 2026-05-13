@@ -15,7 +15,7 @@ Typha is a distributed, append-only event store. Clients append events to per-en
 ```
 Event = {
     entity_type : string       -- e.g. "Order", "Account"
-    entity_id   : bytes        -- client-assigned, opaque
+    entity_id   : string       -- client-assigned; UTF-8, max 64 bytes
     seq         : u64          -- 1, 2, 3, ... per entity; gapless, permanent
     timestamp   : i64          -- nanoseconds since Unix epoch (leader clock)
     payload     : bytes        -- opaque
@@ -30,7 +30,7 @@ Each `(entity_type, entity_id)` pair has its own ordered log. Sequence numbers s
 
 **Storage per node (ADR-3):** Append-only segment log + in-memory hash index (Bitcask model). The index maps `(entity_type, entity_id)` → `[(seq, file_offset)]`. Writes are always sequential appends; reads are an index lookup + sequential scan. The index is fully recoverable by replaying segment files — no separate WAL needed. LSM trees were rejected because their complexity exists to handle updates/deletes, which this system never does in normal operation.
 
-**Replication:** Raft per shard. A write is acknowledged only after `floor(R/2) + 1` replicas confirm it (default R=3). Each shard is an independent Raft group; the keyspace is sharded horizontally.
+**Replication:** VSR per shard. A write is acknowledged only after `floor(R/2) + 1` replicas confirm it. Each shard is an independent VSR group; the keyspace is sharded horizontally. VSR chosen over Raft for deterministic round-robin leader election, which makes simulation testing tractable.
 
 **Index memory:** 16 bytes per event (seq u64 + offset u64). 1 billion events ≈ 16 GB. Acceptable at design-time; if it becomes a constraint, a two-level index can be introduced without changing the on-disk format.
 
@@ -52,17 +52,12 @@ Both require operator credentials, full audit trail, and must be inaccessible vi
 
 | # | Question |
 |---|---|
-| OD-1 | Entity ID format — any bytes, UTF-8 only, or UUID-structured? |
-| OD-2 | Max payload size (must be bounded — no dynamic allocation in hot path) |
 | OD-3 | Replication factor — hardcoded 3 or operator-configurable? |
-| OD-4 | Follower reads — strong consistency vs. stale follower reads? |
 | OD-6 | Wire protocol — gRPC, custom TCP framing, or HTTP/2 bare? (HTTP/1.1 excluded; streaming required) |
-
-OD-7 is resolved: cross-entity cursor type is `TimestampNs`; resuming from cursor `T` re-delivers from `T - SKEW_WINDOW` to handle clock skew. `SKEW_WINDOW` is operator-configured (expected: low single-digit seconds).
 
 ## Tiger Style (the coding style for this project)
 
-Full guide is in `docs/style_guide.md`. The most important rules:
+Full guide is in `docs/TIGER_STYLE.md`. The most important rules:
 
 **Safety:**
 - No recursion. Simple, explicit control flow only.
