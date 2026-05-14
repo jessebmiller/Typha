@@ -7,7 +7,7 @@ Phases are ordered to validate the riskiest assumptions earliest. Each phase's c
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Scaffolding | complete |
-| 2 | Storage Engine | not started |
+| 2 | Storage Engine | complete |
 | 3 | Wire Protocol | not started |
 | 4 | Single-Node End-to-End | not started |
 | 5 | Simulation Harness + VSR | not started |

@@ -6,4 +6,7 @@ pub fn main() !void {}
 test {
     _ = @import("types.zig");
     _ = @import("constants.zig");
+    _ = @import("segment_log.zig");
+    _ = @import("index.zig");
+    _ = @import("storage_test.zig");
 }
